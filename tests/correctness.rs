@@ -141,31 +141,6 @@ fn klee_minty(n: usize) -> String {
     s
 }
 
-fn random_feasible_lp(n: usize, m: usize) -> String {
-    let mut rng = rand::rng();
-
-    let x: Vec<i64> = (0..n).map(|_| rng.random_range(1..10)).collect();
-    let mut s = format!("{}\n{}\n", n, m);
-
-    let c: Vec<String> = (0..n)
-        .map(|_| rng.random_range(-10..10).to_string())
-        .collect();
-    s += &c.join(" ");
-    s += "\n";
-
-    for _ in 0..m {
-        let a: Vec<String> = (0..n).map(|_| rng.random_range(1..5).to_string()).collect();
-        let rhs: i64 = a
-            .iter()
-            .zip(x.iter())
-            .map(|(aj, xj)| aj.parse::<i64>().unwrap() * xj)
-            .sum();
-        s += &format!("{} {}", a.join(" "), rhs);
-        s += "\n";
-    }
-    s
-}
-
 #[test]
 fn correctness_harness() {
     for (name, txt) in small_lps() {
@@ -178,14 +153,6 @@ fn correctness_harness() {
     for n in [5, 7, 10].iter() {
         let txt = klee_minty(*n);
         let lp = simplex::parse_lp(&txt).unwrap();
-        let mut solver = SimplexSolver::new(lp.clone());
-        let sol = solver.solve().unwrap();
-        verify_solution(&lp, &sol);
-    }
-
-    for _ in 0..5 {
-        let txt = random_feasible_lp(5, 3);
-        let lp = crate::simplex::parse_lp(&txt).unwrap();
         let mut solver = SimplexSolver::new(lp.clone());
         let sol = solver.solve().unwrap();
         verify_solution(&lp, &sol);

@@ -6,3 +6,4 @@ pub mod rational;
 pub mod simplex;
 pub mod solution;
 pub mod tableau;
+pub mod variable;

@@ -1,106 +1,98 @@
+use crate::matrix::Matrix;
 use crate::tableau::Tableau;
+use crate::variable::VarKind;
 use crate::{rational::Rational, solution::Solution};
-use anyhow::Result;
-use num_traits::{one, zero};
+use num_traits::{One, Zero};
 
-// pub fn phase2(tableau: &mut Tableau) -> Result<Solution> {
-//     while let Some(j) = tableau.entering_variable() {
-//         let entering = j;
-
-//         let leaving = tableau.leaving_row(entering);
-
-//         let row = match leaving {
-//             Some(r) => r,
-
-//             None => {
-//                 return Ok(unbounded_direction(tableau, entering));
-//             }
-//         };
-
-//         tableau.pivot(row, entering);
-//     }
-
-//     Ok(optimal_solution(tableau))
-// }
-
-pub fn phase2(tableau: &mut Tableau) -> Result<Solution> {
-    while let Some(entering) = tableau.entering_variable() {
-        match tableau.leaving_row(entering) {
-            Some(row) => tableau.pivot(row, entering),
-            None => {
-                let sol = unbounded_direction(tableau, entering);
-                strip_artificials(tableau);
-                return Ok(sol);
+impl Tableau {
+    pub fn phase2(&mut self, c: &[Rational]) -> Solution {
+        let obj_row = self.m;
+        let width = self.matrix.cols;
+        for j in 0..width {
+    *self.matrix.index_mut(obj_row, j) = Rational::zero();
+}
+for (j, var) in self.variables.iter().enumerate() {
+    if let VarKind::Original(k) = var.kind {
+        *self.matrix.index_mut(obj_row, j) = -c[k].clone();
+    }
+}
+for i in 0..self.m {
+    if let Some(j) = self.basis[i]
+        && let VarKind::Original(k) = self.variables[j].kind {
+            let coeff = c[k].clone();
+            if !coeff.is_zero() {
+                for l in 0..width {
+                    let val = self.matrix.index(i, l).clone();
+                    *self.matrix.index_mut(obj_row, l) += coeff.clone() * val;
+                }
             }
         }
-    }
-
-    let sol = optimal_solution(tableau);
-    strip_artificials(tableau);
-    Ok(sol)
 }
-
-fn optimal_solution(tableau: &Tableau) -> Solution {
-    let art = tableau.n; // == n
-
-    println!(
-        "DEBUG optimal_solution: n={} m={} art={} matrix.cols={}",
-        tableau.n, tableau.m, art, tableau.matrix.cols
-    );
-    println!("DEBUG obj row at art cols:");
-    for k in 0..tableau.m {
-        let rc = tableau.reduced_cost(art + k);
-        println!(
-            "  obj[{}] = {:?}  => dual[{}] = {:?}",
-            art + k,
-            rc,
-            k,
-            -rc.clone()
-        );
+        while let Some(entering) = self.entering_variable() {
+            match self.leaving_row(entering) {
+                Some(row) => self.pivot(row, entering),
+                None => return self.unbounded_direction(self.n),
+            }
+        }
+        
+        self.optimal_solution(c,self.n)
     }
 
-    let mut primal: Vec<Rational> = vec![zero(); tableau.n];
-    for i in 0..tableau.m {
-        let var = tableau.basis[i];
-        if var < tableau.n {
-            primal[var] = tableau.rhs(i).clone();
+fn optimal_solution(&self, c: &[Rational], orig_vars: usize) -> Solution {
+    use crate::variable::VarKind;
+
+    let mut primal = vec![Rational::zero(); orig_vars];
+    for i in 0..self.m {
+        if let Some(j) = self.basis[i]
+            && let VarKind::Original(k) = self.variables[j].kind {
+                primal[k] = self.rhs(i).clone();
+            }
+    }
+
+    let mut c_b = Vec::with_capacity(self.m);
+    let mut ab = Matrix::new(self.m, self.m);
+    for i in 0..self.m {
+        let j = self.basis[i].expect("Basis slot missing");
+        c_b.push(match self.variables[j].kind {
+            VarKind::Original(idx) => c[idx].clone(),
+            _ => Rational::zero(),
+        });
+        for row in 0..self.m {
+            *ab.index_mut(row, i) = self.matrix.index(row, j).clone();
+        }
+    }
+    let ab_inv = ab.inverse();
+
+    let mut dual = vec![Rational::zero(); self.m];
+    for i in 0..self.m {
+        for j in 0..self.m {
+            dual[i] += c_b[j].clone() * ab_inv.index(j, i).clone();
         }
     }
 
-    let dual: Vec<Rational> = (0..tableau.m)
-        .map(|k| tableau.reduced_cost(art + k))
-        .collect();
-
-    let objective = -tableau.objective_value();
-
+    let obj = -self.objective_value();
     Solution::Optimal {
-        objective,
+        objective: obj,
         primal,
         dual,
     }
 }
 
-fn unbounded_direction(tableau: &Tableau, entering: usize) -> Solution {
-    let mut direction = vec![zero(); tableau.n];
-
-    direction[entering] = one();
-
-    for i in 0..tableau.m {
-        let var = tableau.basis[i];
-
-        if var < tableau.n {
-            let val = tableau.matrix.index(i, entering).clone();
-            direction[var] = -val;
+    fn unbounded_direction(&self, orig_vars: usize) -> Solution {
+        let n = orig_vars;
+        let mut dir = vec![Rational::zero(); n];
+        let enter = self.entering_variable().unwrap();
+        if let VarKind::Original(k) = self.variables[enter].kind
+            && k < n {
+                dir[k] = One::one();
+            }
+        for i in 0..self.m {
+            if let Some(j) = self.basis[i]
+                && let VarKind::Original(k) = self.variables[j].kind
+                    && k < n {
+                        dir[k] = -self.matrix.index(i, enter).clone();
+                    }
         }
-    }
-
-    Solution::Unbounded { direction }
-}
-
-fn strip_artificials(tableau: &mut Tableau) {
-    let art = tableau.n;
-    let m = tableau.m;
-    for k in (0..m).rev() {
-        tableau.matrix.remove_column(art + k);
+        Solution::Unbounded { direction: dir }
     }
 }

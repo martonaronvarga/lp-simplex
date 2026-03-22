@@ -1,6 +1,4 @@
 use crate::matrix::Matrix;
-use crate::phase1::phase1;
-use crate::phase2::phase2;
 use crate::rational::Rational;
 use crate::solution::Solution;
 use crate::tableau::Tableau;
@@ -76,23 +74,37 @@ pub fn parse_lp(text: &str) -> Result<LinearProgram> {
 
 pub struct SimplexSolver {
     lp: LinearProgram,
-    tableau: Option<Tableau>,
 }
 
 impl SimplexSolver {
     pub fn new(lp: LinearProgram) -> Self {
-        Self { lp, tableau: None }
+        Self { lp }
     }
 
     pub fn solve(&mut self) -> Result<Solution> {
         let mut tableau = Tableau::from_lp(&self.lp);
+        println!("==== PROBLEM ====");
+        println!("Variables: n = {}", self.lp.n);
+        println!("Constraints: m = {}", self.lp.m);
+        println!("Objective coefficients: {:?}", self.lp.c);
+        println!("A (constraints matrix):");
+        for i in 0..self.lp.m {
+            print!("  ");
+            for j in 0..self.lp.n {
+                print!("{:>8} ", self.lp.a.index(i, j));
+            }
+            println!("| rhs = {}", self.lp.b[i]);
+        }
+        println!("===================");
 
-        if !phase1(&mut tableau) {
-            Ok(Solution::Infeasible)
-        } else {
-            tableau.restore_objective(&self.lp);
-            let sol = phase2(&mut tableau)?;
-            Ok(sol)
+        println!("==== Initial Tableau ====");
+        tableau.pretty_print();
+
+        let phase1_res = tableau.phase1();
+
+        match phase1_res {
+            Err(sol) => Ok(sol),
+            Ok(()) => Ok(tableau.phase2(&self.lp.c)),
         }
     }
 }

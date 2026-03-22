@@ -1,110 +1,145 @@
-use crate::{matrix::Matrix, rational::Rational, tableau::Tableau};
+use crate::{rational::Rational, solution::Solution, tableau::Tableau};
 use num_traits::{One, Signed, Zero};
 
-pub fn phase1(tableau: &mut Tableau) -> bool {
-    let m = tableau.m;
-    let orig_cols = tableau.matrix.cols;
-    let rhs_col = orig_cols - 1;
-
-    println!("DEBUG: Entering Phase 1.");
-    tableau.pretty_print();
-
-    for i in 0..m {
-        if tableau.rhs(i).is_negative() {
-            for val in tableau.matrix.row_mut(i) {
-                *val = -val.clone();
-            }
-        }
-    }
-
-    let artificial_start = rhs_col;
-    let new_cols = orig_cols + m;
-    let mut new_matrix = Matrix::new(m + 1, new_cols);
-
-    for i in 0..=m {
-        for j in 0..rhs_col {
-            *new_matrix.index_mut(i, j) = tableau.matrix.index(i, j).clone();
-        }
-        *new_matrix.index_mut(i, new_cols - 1) = tableau.matrix.index(i, rhs_col).clone();
-    }
-    for i in 0..m {
-        *new_matrix.index_mut(i, artificial_start + i) = Rational::one();
-    }
-    tableau.matrix = new_matrix;
-    tableau.basis = (artificial_start..artificial_start + m).collect();
-
-    println!("DEBUG: Tableau after adding artificial variables:");
-    tableau.pretty_print();
-
-    let obj_row = m;
-    for j in 0..tableau.matrix.cols {
-        *tableau.matrix.index_mut(obj_row, j) = Rational::zero();
-    }
-    for k in 0..m {
-        *tableau.matrix.index_mut(obj_row, artificial_start + k) = -Rational::one();
-    }
-    for i in 0..m {
-        for j in 0..tableau.matrix.cols {
-            let val = tableau.matrix.index(i, j).clone();
-            *tableau.matrix.index_mut(obj_row, j) += val;
-        }
-    }
-
-    println!("DEBUG: Constructed auxiliary objective row:");
-    tableau.pretty_print();
-
-    let total_vars = tableau.matrix.cols - 1; // exclude RHS
-    loop {
-        let entering = (0..total_vars)
-            .find(|&j| tableau.matrix.index(obj_row, j).is_positive())
-            .iter()
-            .max()
-            .copied();
-        match entering {
-            None => break, // Phase 1 stop
-            Some(col) => {
-                if let Some(leaving_row) = tableau.leaving_row(col) {
-                    tableau.pivot(leaving_row, col);
-                } else {
-                    println!("DEBUG: No leaving row found. Problem is infeasible in Phase 1.");
-                    return false;
+impl Tableau {
+    pub fn phase1(&mut self) -> Result<(), Solution> {
+        for i in 0..self.m {
+            if self.rhs(i).is_negative() {
+                for v in self.matrix.row_mut(i) {
+                    *v = -v.clone();
                 }
             }
         }
-    }
-
-    let aux_obj = tableau.matrix.index(obj_row, tableau.matrix.cols - 1);
-    if !aux_obj.is_zero() {
-        println!(
-            "DEBUG: Infeasible problem detected. Auxiliary objective: {:?}",
-            aux_obj
-        );
-        return false;
-    }
-
-    for k in 0..m {
-        *tableau.matrix.index_mut(obj_row, artificial_start + k) = Rational::zero();
-    }
-
-    for i in 0..m {
-        if tableau.basis[i] < artificial_start {
-            continue; // already an original variable
+        let art_cols = self.add_artificials();
+        let obj_row = self.m;
+        for j in 0..self.matrix.cols {
+            *self.matrix.index_mut(obj_row, j) = Rational::zero();
         }
-        let mut pivoted = false;
-        for j in 0..tableau.n {
-            if !tableau.matrix.index(i, j).is_zero() {
-                tableau.pivot(i, j);
-                pivoted = true;
-                break;
+        for &col in &art_cols {
+            *self.matrix.index_mut(obj_row, col) = -Rational::one();
+        }
+        for i in 0..self.m {
+            for j in 0..self.matrix.cols {
+                let val = self.matrix.index(i, j).clone();
+                *self.matrix.index_mut(obj_row, j) += val;
             }
         }
-        if !pivoted {
-            tableau.basis[i] = tableau.n;
+
+        (0..self.m).for_each(|i| {
+            self.basis[i] = Some(art_cols[i]);
+        });
+        let total_vars = self.matrix.cols - 1;
+        loop {
+            let enter = (0..total_vars)
+                .find(|&j| self.matrix.index(obj_row, j).is_positive())
+                .iter()
+                .max()
+                .copied();
+
+            match enter {
+                None => {
+                                break;
+                },
+                Some(col) => {
+                    if let Some(leave) = self.leaving_row(col) {
+
+                        self.pivot(leave, col);
+                    } else {
+                        return Err(Solution::Infeasible);
+                    }
+                }
+            }
         }
+        let aux_obj = self.matrix.index(obj_row, self.matrix.cols - 1);
+        if *aux_obj != Rational::zero() {
+            return Err(Solution::Infeasible);
+        }
+
+        let mut to_replace = Vec::new();
+        for i in 0..self.basis.len() {
+            if let Some(j) = self.basis[i]
+                && self.variables[j].is_artificial() {
+                to_replace.push(i);
+            }
+        }
+        let mut removed_rows = Vec::new();
+        for &i in &to_replace {
+            let width = self.matrix.cols - 1;
+            let mut found = false;
+            for k in 0..width {
+                if !self.variables[k].is_artificial()
+                   && self.matrix.index(i, k).is_one()
+                   && (0..self.basis.len()).all(|ii| ii == i || self.matrix.index(ii, k).is_zero())
+                {
+                    self.pivot(i, k);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                let is_artificial_col = |j: usize| self.variables[j].is_artificial();
+                let row_all_zero = (0..width)
+                    .all(|j| is_artificial_col(j) || self.matrix.index(i, j).is_zero());
+                let rhs_zero = self.rhs(i).is_zero();
+                if row_all_zero && rhs_zero {
+                    removed_rows.push(i);
+                } else {
+                    return Err(Solution::Infeasible);
+                }
+            }
+        }
+
+        let mut columns_to_remove = Vec::new();
+        for &i in &removed_rows {
+            if let Some(Some(j)) = self.basis.get(i).copied()
+                && self.variables[j].is_artificial() {
+                    columns_to_remove.push(j);
+                }
+        }
+        removed_rows.sort_by(|a, b| b.cmp(a));
+        for &i in &removed_rows {
+            self.matrix.remove_row(i);
+            self.basis.remove(i);
+        }
+        columns_to_remove.sort_by(|a, b| b.cmp(a));
+        for &j in &columns_to_remove {
+            self.matrix.remove_columns(&[j]);
+            self.variables.remove(j);
+            // Always update all indices in self.basis > j!
+            for idx in self.basis.iter_mut().flatten() {
+                if *idx > j { *idx -= 1; }
+            }
+        }
+
+        self.m = self.matrix.rows - 1;
+        self.basis.truncate(self.m);
+
+
+
+        for (row, &b) in self.basis.iter().enumerate() {
+            if let Some(j) = b {
+                if self.variables[j].is_artificial() {
+                    eprintln!("ERROR: Still have basic artificial {} at row {} after phase 1!", self.variables[j].name, row);
+                    return Err(Solution::Infeasible);
+                }
+            } else {
+                eprintln!("ERROR: No basic variable found at row {} after phase 1!", row);
+                return Err(Solution::Infeasible);
+            }
+        }
+       
+        self.strip_artificials();
+
+        for &b in &self.basis {
+            if let Some(j) = b {
+                if self.variables[j].is_artificial() {
+                    return Err(Solution::Infeasible);
+                }
+            } else {
+                return Err(Solution::Infeasible);
+            }
+        }
+
+        Ok(())
     }
-
-    println!("DEBUG: Phase 1 complete, tableau cleaned:");
-    tableau.pretty_print();
-
-    true
 }
