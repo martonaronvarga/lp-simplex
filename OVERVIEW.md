@@ -23,7 +23,7 @@ Rust solver core -> (optinal MLIR kernel generation) -> solution output
 - solve: original objective c^Tx
 - main loop:
 ```
-  while reduced_const < 0:
+  while reduced_cost < 0:
     choose entering variable
     perform ratio test
     pivot
@@ -37,4 +37,4 @@ Rust solver core -> (optinal MLIR kernel generation) -> solution output
 2. Unbounded problem
 - unbounded direction
 3. Infeasible problem
-4. Input format in readme.md
+4. Input format in README.md
